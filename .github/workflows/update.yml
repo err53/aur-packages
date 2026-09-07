@@ -38,11 +38,11 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           sudo -u builder --preserve-env=GITHUB_TOKEN python scripts/update-version.py
-          if git diff --quiet -- packages/podkit-bin/PKGBUILD packages/podkit-bin/.SRCINFO; then
+          if git diff --quiet -- packages/podkit/PKGBUILD packages/podkit/.SRCINFO; then
             echo 'changed=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          source packages/podkit-bin/PKGBUILD
+          source packages/podkit/PKGBUILD
           echo 'changed=true' >> "$GITHUB_OUTPUT"
           echo "version=$pkgver" >> "$GITHUB_OUTPUT"
 
@@ -58,14 +58,14 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git fetch origin "refs/heads/$branch:refs/remotes/origin/$branch" || true
           git checkout -B "$branch"
-          git add packages/podkit-bin/PKGBUILD packages/podkit-bin/.SRCINFO
-          git commit -m "Update podkit-bin to $VERSION"
+          git add packages/podkit/PKGBUILD packages/podkit/.SRCINFO
+          git commit -m "Update podkit to $VERSION"
           git push --force-with-lease origin "$branch"
           body="$(printf 'Upstream release: %s\n\nRelease notes: %s\n\nManual review required: confirm upstream licensing, runtime dependencies, archive layout, and native package checks before merge.' "$release_url" "$release_url")"
           pr_number="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')"
           if [[ -n "$pr_number" ]]; then
-            gh pr edit "$pr_number" --title "Update podkit-bin to $VERSION" --body "$body"
+            gh pr edit "$pr_number" --title "Update podkit to $VERSION" --body "$body"
           else
-            gh pr create --base main --head "$branch" --title "Update podkit-bin to $VERSION" --body "$body"
+            gh pr create --base main --head "$branch" --title "Update podkit to $VERSION" --body "$body"
           fi
           gh workflow run check.yml --ref "$branch"

@@ -24,12 +24,12 @@ for package_dir in packages/*; do
       sudo pacman -U --noconfirm "$package_file"
     done < <(makepkg --packagelist)
 
-    if [[ "$package_name" == podkit-bin ]]; then
+    if [[ "$package_name" == podkit ]]; then
       source PKGBUILD
       podkit --version | grep -F "$pkgver"
       podkit --help >/dev/null
-      pacman -Ql podkit-bin | grep -Fx 'podkit-bin /usr/bin/podkit'
-      pacman -Ql podkit-bin | grep -Fx 'podkit-bin /usr/share/licenses/podkit-bin/LICENSE'
+      pacman -Ql podkit | grep -Fx 'podkit /usr/bin/podkit'
+      pacman -Ql podkit | grep -Fx 'podkit /usr/share/licenses/podkit/LICENSE'
     fi
   )
 done
