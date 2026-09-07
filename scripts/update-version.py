@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""Update podkit-bin to a verified stable Podkit release."""
+"""Update the source-built Podkit package to a stable release."""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+import io
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import tarfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -19,10 +21,8 @@ from pathlib import Path
 
 REPOSITORY = "jvgomg/podkit"
 TAG_RE = re.compile(r"podkit@(\d+)\.(\d+)\.(\d+)")
-BINARY_ASSETS = ("podkit-linux-x64.tar.gz",)
-ASSETS = (*BINARY_ASSETS, "SHA256SUMS.txt")
 ROOT = Path(__file__).resolve().parents[1]
-PACKAGE_DIR = ROOT / "packages" / "podkit-bin"
+PACKAGE_DIR = ROOT / "packages" / "podkit"
 PKGBUILD = PACKAGE_DIR / "PKGBUILD"
 SRCINFO = PACKAGE_DIR / ".SRCINFO"
 
@@ -34,7 +34,7 @@ def request(url: str) -> bytes:
         "X-GitHub-Api-Version": "2022-11-28",
     }
     token = os.environ.get("GITHUB_TOKEN")
-    if token:
+    if token and urllib.parse.urlparse(url).hostname == "api.github.com":
         headers["Authorization"] = f"Bearer {token}"
     try:
         with urllib.request.urlopen(
@@ -93,38 +93,6 @@ def select_release(version: str | None) -> tuple[str, dict[str, object]]:
     return selected_version, selected_release
 
 
-def asset_urls(release: dict[str, object]) -> dict[str, str]:
-    raw_assets = release.get("assets")
-    if not isinstance(raw_assets, list):
-        raise RuntimeError("selected release has no asset list")
-    urls: dict[str, str] = {}
-    for required in ASSETS:
-        matches = [asset for asset in raw_assets if asset.get("name") == required]
-        if len(matches) != 1:
-            raise RuntimeError(
-                f"expected exactly one {required} release asset; found {len(matches)}"
-            )
-        url = matches[0].get("browser_download_url")
-        if not isinstance(url, str) or not url:
-            raise RuntimeError(f"release asset {required} has no download URL")
-        urls[required] = url
-    return urls
-
-
-def sha256(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-def published_hash(checksums: str, filename: str) -> str:
-    pattern = re.compile(rf"^([0-9a-fA-F]{{64}})  {re.escape(filename)}$")
-    matches = [match.group(1).lower() for line in checksums.splitlines() if (match := pattern.fullmatch(line))]
-    if len(matches) != 1:
-        raise RuntimeError(
-            f"expected exactly one checksum line for {filename}; found {len(matches)}"
-        )
-    return matches[0]
-
-
 def replace_one(text: str, pattern: str, replacement: str, label: str) -> str:
     updated, count = re.subn(pattern, replacement, text, flags=re.MULTILINE)
     if count != 1:
@@ -132,28 +100,22 @@ def replace_one(text: str, pattern: str, replacement: str, label: str) -> str:
     return updated
 
 
-def update_pkgbuild(version: str, hashes: dict[str, str]) -> str:
+def update_pkgbuild(version: str, checksum: str) -> str:
     original = PKGBUILD.read_text(encoding="utf-8")
+    current = re.findall(r"^pkgver=(\d+\.\d+\.\d+)$", original, re.MULTILINE)
+    if len(current) != 1:
+        raise RuntimeError("expected exactly one pkgver assignment")
     updated = replace_one(original, r"^pkgver=\d+\.\d+\.\d+$", f"pkgver={version}", "pkgver")
-    updated = replace_one(updated, r"^pkgrel=\d+$", "pkgrel=1", "pkgrel")
-    updated = replace_one(
-        updated,
-        r"^sha256sums=\('[0-9a-f]{64}'\)$",
-        f"sha256sums=('{hashes['LICENSE']}')",
-        "sha256sums",
-    )
-    return replace_one(
-        updated,
-        r"^sha256sums_x86_64=\('[0-9a-f]{64}'\)$",
-        f"sha256sums_x86_64=('{hashes['podkit-linux-x64.tar.gz']}')",
-        "sha256sums_x86_64",
-    )
+    if current[0] != version:
+        updated = replace_one(updated, r"^pkgrel=\d+$", "pkgrel=1", "pkgrel")
+    return replace_one(updated, r"^sha256sums=\('[0-9a-f]{64}'\)$",
+                       f"sha256sums=('{checksum}')", "sha256sums")
 
 
 def generate_srcinfo(pkgbuild: str) -> str:
     makepkg = shutil.which("makepkg")
     if makepkg is None:
-        raise RuntimeError("makepkg is required to generate packages/podkit-bin/.SRCINFO")
+        raise RuntimeError("makepkg is required to generate packages/podkit/.SRCINFO")
     with tempfile.TemporaryDirectory(prefix="podkit-srcinfo-") as directory:
         Path(directory, "PKGBUILD").write_text(pkgbuild, encoding="utf-8")
         result = subprocess.run(
@@ -181,37 +143,25 @@ def main() -> int:
     parser.add_argument("version", nargs="?", help="stable release version (X.Y.Z)")
     args = parser.parse_args()
 
-    version, release = select_release(args.version)
-    urls = asset_urls(release)
-    downloads = {name: request(url) for name, url in urls.items()}
-    license_url = (
-        f"https://raw.githubusercontent.com/{REPOSITORY}/"
-        f"podkit%40{urllib.parse.quote(version)}/LICENSE"
+    version, _ = select_release(args.version)
+    archive = request(
+        f"https://github.com/{REPOSITORY}/archive/refs/tags/podkit%40{version}.tar.gz"
     )
-    license_data = request(license_url)
-    if not license_data:
-        raise RuntimeError("tagged LICENSE is empty")
-
-    try:
-        checksum_text = downloads["SHA256SUMS.txt"].decode("utf-8")
-    except UnicodeDecodeError as error:
-        raise RuntimeError("SHA256SUMS.txt is not UTF-8") from error
-
-    hashes = {"LICENSE": sha256(license_data)}
-    for filename in BINARY_ASSETS:
-        computed = sha256(downloads[filename])
-        expected = published_hash(checksum_text, filename)
-        if computed != expected:
-            raise RuntimeError(
-                f"checksum mismatch for {filename}: computed {computed}, published {expected}"
-            )
-        hashes[filename] = computed
-
-    pkgbuild = update_pkgbuild(version, hashes)
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as source:
+        prefix = f"podkit-podkit-{version}/"
+        for required in ("LICENSE", "bun.lock", "packages/libgpod-node/binding.gyp",
+                         "packages/podkit-cli/scripts/compile.sh"):
+            matches = [member for member in source.getmembers() if member.name == prefix + required]
+            if len(matches) != 1 or not matches[0].isfile():
+                raise RuntimeError(f"source archive missing unique regular file: {required}")
+        manifest = source.extractfile(prefix + "packages/podkit-cli/package.json")
+        if manifest is None or json.load(manifest)["version"] != version:
+            raise RuntimeError("source CLI version does not match release")
+    pkgbuild = update_pkgbuild(version, hashlib.sha256(archive).hexdigest())
     srcinfo = generate_srcinfo(pkgbuild)
     atomic_write(PKGBUILD, pkgbuild)
     atomic_write(SRCINFO, srcinfo)
-    print(f"Updated podkit-bin to {version}")
+    print(f"Updated podkit to {version}")
     return 0
 
 
