@@ -3,13 +3,13 @@ name: Check
 on:
   pull_request:
     paths:
-      - 'aur/**'
-      - 'scripts/update-version.py'
+      - 'packages/**'
+      - 'scripts/**'
       - '.github/workflows/check.yml'
   push:
     paths:
-      - 'aur/**'
-      - 'scripts/update-version.py'
+      - 'packages/**'
+      - 'scripts/**'
       - '.github/workflows/check.yml'
   workflow_dispatch:
 
@@ -17,52 +17,24 @@ permissions:
   contents: read
 
 jobs:
-  package:
-    name: Package (${{ matrix.arch }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-24.04
-            arch: x86_64
-          - runner: ubuntu-24.04-arm
-            arch: aarch64
-    runs-on: ${{ matrix.runner }}
+  packages:
+    name: Packages (x86_64)
+    runs-on: ubuntu-24.04
     container: archlinux:base-devel
 
     steps:
+      - name: Install validation tools
+        run: pacman -Syu --noconfirm git namcap sudo
+
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Prepare Arch builder
+      - name: Create non-root builder
         run: |
-          pacman -Syu --noconfirm namcap sudo
           useradd --create-home builder
           printf 'builder ALL=(ALL:ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/builder
           chmod 440 /etc/sudoers.d/builder
           chown -R builder:builder "$GITHUB_WORKSPACE"
 
-      - name: Verify .SRCINFO
-        run: sudo -u builder bash -c 'cd aur && diff .SRCINFO <(makepkg --printsrcinfo)'
-
-      - name: Build package
-        run: sudo -u builder bash -c 'cd aur && makepkg --syncdeps --cleanbuild --noconfirm'
-
-      - name: Run namcap
-        run: |
-          package="$(sudo -u builder bash -c 'cd aur && makepkg --packagelist')"
-          sudo -u builder namcap aur/PKGBUILD | tee aur/namcap-pkgbuild.log
-          sudo -u builder namcap "$package" | tee aur/namcap-package.log
-          if grep -F ' E: ' aur/namcap-pkgbuild.log aur/namcap-package.log; then
-            exit 1
-          fi
-
-      - name: Install and smoke test
-        run: |
-          package="$(sudo -u builder bash -c 'cd aur && makepkg --packagelist')"
-          pacman -U --noconfirm "$package"
-          source aur/PKGBUILD
-          podkit --version | grep -F "$pkgver"
-          podkit --help >/dev/null
-          pacman -Ql podkit-bin | grep -Fx 'podkit-bin /usr/bin/podkit'
-          pacman -Ql podkit-bin | grep -Fx 'podkit-bin /usr/share/licenses/podkit-bin/LICENSE'
+      - name: Validate packages
+        run: sudo -u builder scripts/check-packages.sh

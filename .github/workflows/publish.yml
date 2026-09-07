@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - 'aur/**'
+      - 'packages/**'
   workflow_dispatch:
 
 permissions:
@@ -17,33 +17,21 @@ jobs:
     container: archlinux:base-devel
 
     steps:
+      - name: Install validation tools
+        run: pacman -Syu --noconfirm git namcap sudo
+
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Prepare Arch builder
+      - name: Create non-root builder
         run: |
-          pacman -Syu --noconfirm namcap sudo
           useradd --create-home builder
           printf 'builder ALL=(ALL:ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/builder
           chmod 440 /etc/sudoers.d/builder
           chown -R builder:builder "$GITHUB_WORKSPACE"
 
-      - name: Validate package
-        run: |
-          sudo -u builder bash -c 'cd aur && diff .SRCINFO <(makepkg --printsrcinfo)'
-          sudo -u builder bash -c 'cd aur && makepkg --syncdeps --cleanbuild --noconfirm'
-          package="$(sudo -u builder bash -c 'cd aur && makepkg --packagelist')"
-          sudo -u builder namcap aur/PKGBUILD | tee aur/namcap-pkgbuild.log
-          sudo -u builder namcap "$package" | tee aur/namcap-package.log
-          if grep -F ' E: ' aur/namcap-pkgbuild.log aur/namcap-package.log; then
-            exit 1
-          fi
-          pacman -U --noconfirm "$package"
-          source aur/PKGBUILD
-          podkit --version | grep -F "$pkgver"
-          podkit --help >/dev/null
-          pacman -Ql podkit-bin | grep -Fx 'podkit-bin /usr/bin/podkit'
-          pacman -Ql podkit-bin | grep -Fx 'podkit-bin /usr/share/licenses/podkit-bin/LICENSE'
+      - name: Validate packages
+        run: sudo -u builder scripts/check-packages.sh
 
   publish:
     needs: validate
@@ -53,7 +41,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Mirror package to AUR
+      - name: Mirror packages to AUR
         env:
           AUR_EMAIL: ${{ vars.AUR_EMAIL }}
           AUR_KNOWN_HOSTS: ${{ secrets.AUR_KNOWN_HOSTS }}
@@ -66,19 +54,25 @@ jobs:
           : "${AUR_SSH_PRIVATE_KEY:?AUR_SSH_PRIVATE_KEY repository secret is required}"
           install -d -m 700 ~/.ssh
           printf '%s\n' "$AUR_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur-podkit
-          chmod 600 ~/.ssh/known_hosts ~/.ssh/aur-podkit
-          export GIT_SSH_COMMAND='ssh -i ~/.ssh/aur-podkit -o IdentitiesOnly=yes'
-          git clone ssh://aur@aur.archlinux.org/podkit-bin.git aur-repository
-          git -C aur-repository rm -rf --ignore-unmatch .
-          cp aur/PKGBUILD aur/.SRCINFO aur/LICENSE aur/REUSE.toml aur-repository/
-          git -C aur-repository add -A
-          if git -C aur-repository diff --cached --quiet; then
-            echo 'AUR repository already matches aur/; nothing to publish.'
-            exit 0
-          fi
-          source aur/PKGBUILD
-          git -C aur-repository config user.name "$AUR_USERNAME"
-          git -C aur-repository config user.email "$AUR_EMAIL"
-          git -C aur-repository commit -m "podkit-bin $pkgver-$pkgrel"
-          git -C aur-repository push origin master
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur-packages
+          chmod 600 ~/.ssh/known_hosts ~/.ssh/aur-packages
+          export GIT_SSH_COMMAND='ssh -i ~/.ssh/aur-packages -o IdentitiesOnly=yes'
+
+          for package_dir in packages/*; do
+            [[ -f "$package_dir/PKGBUILD" ]] || continue
+            package_name="$(basename "$package_dir")"
+            checkout="aur-$package_name"
+            git clone "ssh://aur@aur.archlinux.org/$package_name.git" "$checkout"
+            git -C "$checkout" rm -rf --ignore-unmatch .
+            cp -a "$package_dir/." "$checkout/"
+            git -C "$checkout" add -A
+            if git -C "$checkout" diff --cached --quiet; then
+              echo "$package_name already matches; nothing to publish."
+              continue
+            fi
+            source "$package_dir/PKGBUILD"
+            git -C "$checkout" config user.name "$AUR_USERNAME"
+            git -C "$checkout" config user.email "$AUR_EMAIL"
+            git -C "$checkout" commit -m "$package_name $pkgver-$pkgrel"
+            git -C "$checkout" push origin master
+          done

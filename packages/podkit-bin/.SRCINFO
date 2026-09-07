@@ -4,7 +4,6 @@ pkgbase = podkit-bin
 	pkgrel = 1
 	url = https://github.com/jvgomg/podkit
 	arch = x86_64
-	arch = aarch64
 	license = MIT
 	depends = ffmpeg
 	provides = podkit=0.6.0
@@ -14,7 +13,5 @@ pkgbase = podkit-bin
 	sha256sums = 2d417749dc9a62ba4c495f8f39c42707cacfb8b2de7697e91d7105abdf8b26f3
 	source_x86_64 = podkit-0.6.0-linux-x64.tar.gz::https://github.com/jvgomg/podkit/releases/download/podkit%400.6.0/podkit-linux-x64.tar.gz
 	sha256sums_x86_64 = b9424e8943df1e7aba08bf76b0bfcbcb9a3791be71963d082a5eb55f14d752ea
-	source_aarch64 = podkit-0.6.0-linux-arm64.tar.gz::https://github.com/jvgomg/podkit/releases/download/podkit%400.6.0/podkit-linux-arm64.tar.gz
-	sha256sums_aarch64 = f5fc404dece451c76b81d2582452f39371ed36e0462066329bf6ab06c93c7e1e
 
 pkgname = podkit-bin

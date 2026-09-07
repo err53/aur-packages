@@ -19,14 +19,12 @@ from pathlib import Path
 
 REPOSITORY = "jvgomg/podkit"
 TAG_RE = re.compile(r"podkit@(\d+)\.(\d+)\.(\d+)")
-ASSETS = (
-    "podkit-linux-x64.tar.gz",
-    "podkit-linux-arm64.tar.gz",
-    "SHA256SUMS.txt",
-)
+BINARY_ASSETS = ("podkit-linux-x64.tar.gz",)
+ASSETS = (*BINARY_ASSETS, "SHA256SUMS.txt")
 ROOT = Path(__file__).resolve().parents[1]
-PKGBUILD = ROOT / "aur" / "PKGBUILD"
-SRCINFO = ROOT / "aur" / ".SRCINFO"
+PACKAGE_DIR = ROOT / "packages" / "podkit-bin"
+PKGBUILD = PACKAGE_DIR / "PKGBUILD"
+SRCINFO = PACKAGE_DIR / ".SRCINFO"
 
 
 def request(url: str) -> bytes:
@@ -144,24 +142,18 @@ def update_pkgbuild(version: str, hashes: dict[str, str]) -> str:
         f"sha256sums=('{hashes['LICENSE']}')",
         "sha256sums",
     )
-    updated = replace_one(
+    return replace_one(
         updated,
         r"^sha256sums_x86_64=\('[0-9a-f]{64}'\)$",
         f"sha256sums_x86_64=('{hashes['podkit-linux-x64.tar.gz']}')",
         "sha256sums_x86_64",
-    )
-    return replace_one(
-        updated,
-        r"^sha256sums_aarch64=\('[0-9a-f]{64}'\)$",
-        f"sha256sums_aarch64=('{hashes['podkit-linux-arm64.tar.gz']}')",
-        "sha256sums_aarch64",
     )
 
 
 def generate_srcinfo(pkgbuild: str) -> str:
     makepkg = shutil.which("makepkg")
     if makepkg is None:
-        raise RuntimeError("makepkg is required to generate aur/.SRCINFO")
+        raise RuntimeError("makepkg is required to generate packages/podkit-bin/.SRCINFO")
     with tempfile.TemporaryDirectory(prefix="podkit-srcinfo-") as directory:
         Path(directory, "PKGBUILD").write_text(pkgbuild, encoding="utf-8")
         result = subprocess.run(
@@ -206,7 +198,7 @@ def main() -> int:
         raise RuntimeError("SHA256SUMS.txt is not UTF-8") from error
 
     hashes = {"LICENSE": sha256(license_data)}
-    for filename in ASSETS[:2]:
+    for filename in BINARY_ASSETS:
         computed = sha256(downloads[filename])
         expected = published_hash(checksum_text, filename)
         if computed != expected:

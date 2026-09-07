@@ -16,14 +16,16 @@ jobs:
     container: archlinux:base-devel
 
     steps:
+      - name: Install update tools
+        run: pacman -Syu --noconfirm git github-cli python sudo
+
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
-      - name: Prepare Arch builder
+      - name: Create non-root builder
         run: |
-          pacman -Syu --noconfirm git github-cli python sudo
           useradd --create-home builder
           printf 'builder ALL=(ALL:ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/builder
           chmod 440 /etc/sudoers.d/builder
@@ -35,11 +37,11 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           sudo -u builder --preserve-env=GITHUB_TOKEN python scripts/update-version.py
-          if git diff --quiet -- aur/PKGBUILD aur/.SRCINFO; then
+          if git diff --quiet -- packages/podkit-bin/PKGBUILD packages/podkit-bin/.SRCINFO; then
             echo 'changed=false' >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          source aur/PKGBUILD
+          source packages/podkit-bin/PKGBUILD
           echo 'changed=true' >> "$GITHUB_OUTPUT"
           echo "version=$pkgver" >> "$GITHUB_OUTPUT"
 
@@ -55,10 +57,10 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git fetch origin "refs/heads/$branch:refs/remotes/origin/$branch" || true
           git checkout -B "$branch"
-          git add aur/PKGBUILD aur/.SRCINFO
+          git add packages/podkit-bin/PKGBUILD packages/podkit-bin/.SRCINFO
           git commit -m "Update podkit-bin to $VERSION"
           git push --force-with-lease origin "$branch"
-          body="$(printf 'Upstream release: %s\n\nRelease notes: %s\n\nManual review required: confirm upstream licensing, runtime dependencies, archive layout, and both native architecture checks before merge.' "$release_url" "$release_url")"
+          body="$(printf 'Upstream release: %s\n\nRelease notes: %s\n\nManual review required: confirm upstream licensing, runtime dependencies, archive layout, and native package checks before merge.' "$release_url" "$release_url")"
           pr_number="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')"
           if [[ -n "$pr_number" ]]; then
             gh pr edit "$pr_number" --title "Update podkit-bin to $VERSION" --body "$body"
